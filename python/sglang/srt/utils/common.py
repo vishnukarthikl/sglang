@@ -1722,42 +1722,36 @@ def get_device_sm():
 
 
 def get_nvgpu_memory_capacity():
+    # Try nvidia-smi first
     try:
-        # Run nvidia-smi and capture the output
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"nvidia-smi error: {result.stderr.strip()}")
-
-        # Parse the output to extract memory values
-        memory_values = [
-            float(mem)
-            for mem in result.stdout.strip().split("\n")
-            if re.match(r"^\d+(\.\d+)?$", mem.strip())
-        ]
-
-        if not memory_values:
-            # Fallback to torch.cuda.mem_get_info() when failed to get memory capacity from nvidia-smi,
-            # typically in NVIDIA MIG mode.
-            if torch.cuda.is_available():
-                logger.warning(
-                    "Failed to get GPU memory capacity from nvidia-smi, falling back to torch.cuda.mem_get_info()."
-                )
-                return torch.cuda.mem_get_info()[1] // 1024 // 1024  # unit: MB
-            raise ValueError("No GPU memory values found.")
-
-        # Return the minimum memory value
-        return min(memory_values)
-
+        if result.returncode == 0:
+            memory_values = [
+                float(mem)
+                for mem in result.stdout.strip().split("\n")
+                if re.match(r"^\d+(\.\d+)?$", mem.strip())
+            ]
+            if memory_values:
+                return min(memory_values)
     except FileNotFoundError:
-        raise RuntimeError(
-            "nvidia-smi not found. Ensure NVIDIA drivers are installed and accessible."
+        pass
+
+    # Fallback to torch.cuda.mem_get_info() when nvidia-smi is unavailable or fails
+    # (e.g. missing binary, non-zero exit, NVIDIA MIG mode)
+    if torch.cuda.is_available():
+        logger.warning(
+            "Failed to get GPU memory capacity from nvidia-smi, falling back to torch.cuda.mem_get_info()."
         )
+        return torch.cuda.mem_get_info()[1] // 1024 // 1024  # unit: MB
+
+    raise RuntimeError(
+        "Could not determine GPU memory capacity. nvidia-smi is unavailable and torch.cuda is not accessible."
+    )
 
 
 def get_hpu_memory_capacity():
